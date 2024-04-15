@@ -4,10 +4,76 @@ import Validator, {
   AsyncCheckFunction,
   SyncCheckFunction,
 } from "fastest-validator";
+import express, { Request, Response, NextFunction } from "express";
+import helmet from "helmet";
+import cors from "cors";
+import { instrument } from "@socket.io/admin-ui";
+
+const app = express();
+app.use(
+  helmet({
+    frameguard: {
+      action: "deny",
+    },
+    dnsPrefetchControl: false,
+  })
+);
+
+app.use(
+  cors({
+    origin: ["*", "https://admin.socket.io"],
+    methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  })
+);
+
+app.use(express.urlencoded({ extended: false, limit: "50kb" }));
+app.use(express.json({ limit: "50kb" }));
+
+function handleRequest(req: Request, res: Response, next: NextFunction): void {
+  const start = performance.now();
+  const { method, originalUrl } = req;
+  res.on("finish", () => {
+    const { statusCode } = res;
+    const end = performance.now();
+    console.log(
+      `${method} ${originalUrl} ${statusCode} ${Math.round(end - start)}ms`
+    );
+  });
+  next();
+}
+
+function handleNotFound(
+  req: Request,
+  res: Response,
+  _next: NextFunction
+): Response | void {
+  if (!res.headersSent) {
+    return res.status(404).json({
+      success: false,
+      code: "Not Found",
+      message: `Not Found path ${req.originalUrl}`,
+    });
+  }
+}
+
+app.use(handleRequest);
+
+app.get("/", (_req: Request, res: Response): Response => {
+  return res.status(200).json({
+    success: true,
+    message: "OK",
+    data: {
+      appName: "Smart Lock Api",
+      version: "0.0.0",
+    },
+  });
+});
+
+app.use(handleNotFound);
+
+const http = createServer(app);
 
 export const baseValidator = new Validator({ haltOnFirstError: true });
-
-let status = false;
 
 function safeValidate(
   fn: AsyncCheckFunction | SyncCheckFunction,
@@ -50,8 +116,12 @@ const devicePayloadScema = baseValidator.compile({
   $$strict: true,
 });
 
-const server = createServer();
-const io = new Server(server);
+const io = new Server(http, {
+  cors: {
+    origin: ["*", "https://admin.socket.io"],
+    credentials: true,
+  },
+});
 
 let state = false;
 
@@ -60,9 +130,16 @@ interface JoinDevicePayload {
   type: string;
 }
 
-interface SendPayload {
-  type: string;
-}
+instrument(io, {
+  namespaceName: "/monitoring",
+  auth: {
+    type: "basic",
+    username: "quen",
+    password: "$2a$10$5JspB6420u5NCcRjfx/QaO7FLkvEtrCtCqnX0/F4fdJQx4qka36xm", // qwert12345
+  },
+  readonly: true,
+  mode: "production",
+});
 
 io.on("connection", (socket) => {
   socket.on("join", (payload: JoinDevicePayload) => {
@@ -118,6 +195,6 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(3000, () => {
+http.listen(3000, () => {
   console.log("running on port 3000");
 });
